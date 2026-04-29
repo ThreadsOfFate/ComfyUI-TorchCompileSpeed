@@ -120,11 +120,7 @@ Author: eddy
         dynamic   = compile_args["dynamic"]
         fullgraph = compile_args["fullgraph"]
         
-        base_model = model.model
-        if hasattr(base_model, "diffusion_model"):
-            target_module = base_model.diffusion_model
-        else:
-            target_module = base_model
+        target_module = model.model
 
         if compile_args.get("speed_preset", False) or compile_args.get("experimental_ptx", False):
             try:
@@ -202,8 +198,7 @@ Author: eddy
 
         model_clone  = model.clone()
         clone_base   = model_clone.model
-        clone_target = clone_base.diffusion_model if hasattr(clone_base, "diffusion_model") else clone_base
-
+        
         try:
             cache_enabled    = compile_args.get("reuse_if_similar", True)
             sig              = (id(target_module), backend, mode, dynamic, fullgraph)
@@ -218,7 +213,7 @@ Author: eddy
                     compiled_forward = cached_map[sig]
                     print("[TorchCompileSpeed] Reused compiled forward from cache")
                 else:
-                    original_forward = clone_target.forward
+                    original_forward = clone_base.forward
                     compiled_forward = torch.compile(
                         original_forward,
                         backend=backend,
@@ -229,7 +224,7 @@ Author: eddy
                     cached_map[sig] = compiled_forward
                     print(f"[TorchCompileSpeed] Compiled and cached forward backend={backend}, mode={mode}, dynamic={dynamic}")
             else:
-                original_forward = clone_target.forward
+                original_forward = clone_base.forward
                 compiled_forward = torch.compile(
                     original_forward,
                     backend=backend,
@@ -238,7 +233,7 @@ Author: eddy
                     dynamic=dynamic
                 )
                 
-            clone_target.forward = compiled_forward
+            clone_base.forward = compiled_forward
         except Exception as e:
             print(f"[TorchCompileSpeed] ERROR: Compilation failed: {e}")
             return (model,)
