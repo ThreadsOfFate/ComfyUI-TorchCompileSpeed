@@ -238,7 +238,7 @@ Author: eddy
                     dynamic=dynamic
                 )
                 
-        clone_target.forward = compiled_forward #so this is empty???
+            clone_target.forward = compiled_forward
         except Exception as e:
             print(f"[TorchCompileSpeed] ERROR: Compilation failed: {e}")
             return (model,)
