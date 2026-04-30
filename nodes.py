@@ -115,22 +115,18 @@ Author: eddy
 """
 
     def apply_compile(self, model, compile_args):
-        backend   = compile_args["backend"]
-        mode      = compile_args["mode"]
-        dynamic   = compile_args["dynamic"]
+        backend = compile_args["backend"]
+        mode = compile_args["mode"]
+        dynamic = compile_args["dynamic"]
         fullgraph = compile_args["fullgraph"]
-        
-        target_module = model.model
 
         if compile_args.get("speed_preset", False) or compile_args.get("experimental_ptx", False):
             try:
                 from torch._inductor import config as inductor_config
-                
-                inductor_config.triton.cudagraphs      = False
-                inductor_config.max_autotune           = True
+                inductor_config.triton.cudagraphs = False
+                inductor_config.max_autotune = True
                 inductor_config.max_autotune_pointwise = True
-                inductor_config.max_autotune_gemm      = True
-                
+                inductor_config.max_autotune_gemm = True
                 if hasattr(inductor_config, 'max_autotune_conv'):
                     inductor_config.max_autotune_conv = True
                 if compile_args.get("experimental_ptx", False):
@@ -138,35 +134,29 @@ Author: eddy
                         inductor_config.coordinate_descent_tuning = True
                     if hasattr(inductor_config, 'triton') and hasattr(inductor_config.triton, 'use_fast_math'):
                         inductor_config.triton.use_fast_math = compile_args.get("ptx_fast_math", True)
-                        
                 print("[TorchCompileSpeed] Applied inductor config")
             except Exception as e:
                 print(f"[TorchCompileSpeed] Warning: Could not apply inductor config: {e}")
 
         try:
             torch._dynamo.config.cache_size_limit = compile_args["dynamo_cache_size_limit"]
-            torch._dynamo.config.recompile_limit  = compile_args.get("dynamo_recompile_limit", 128)
+            torch._dynamo.config.recompile_limit = compile_args.get("dynamo_recompile_limit", 128)
         except Exception as e:
             print(f"[TorchCompileSpeed] Warning: Could not set dynamo config: {e}")
 
         if compile_args.get("experimental_ptx", False):
             try:
                 import os
-                
                 if compile_args.get("ptx_cache_dir"):
                     os.environ["TRITON_CACHE_DIR"] = str(compile_args.get("ptx_cache_dir"))
-                    
                 torch.backends.cuda.matmul.allow_tf32 = True
                 torch.backends.cudnn.allow_tf32 = True
-                
-                device = next(iter(target_module.parameters())).device if any(True for _ in target_module.parameters()) else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-                dtype  = torch.bfloat16 if hasattr(torch, 'bfloat16') else torch.float16
+                device = next(iter(model.model.parameters())).device if any(True for _ in model.model.parameters()) else torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                dtype = torch.bfloat16 if hasattr(torch, 'bfloat16') else torch.float16
                 warmed = False
-                
                 try:
                     import triton
                     import triton.ops as tops
-                    
                     if torch.cuda.is_available():
                         a = torch.randn(256, 256, device=device, dtype=dtype)
                         b = torch.randn(256, 256, device=device, dtype=dtype)
@@ -177,17 +167,14 @@ Author: eddy
                         print("[TorchCompileSpeed] PTX warmup via triton.ops.matmul")
                 except Exception:
                     pass
-                    
                 if not warmed and torch.cuda.is_available():
                     class _Matmul(torch.nn.Module):
                         def forward(self, x, y):
                             return torch.matmul(x, y)
-                            
-                    mod  = _Matmul().to(device=device, dtype=dtype).eval()
+                    mod = _Matmul().to(device=device, dtype=dtype).eval()
                     cmod = torch.compile(mod, backend=backend, fullgraph=fullgraph, mode=mode, dynamic=dynamic)
-                    a    = torch.randn(512, 512, device=device, dtype=dtype)
-                    b    = torch.randn(512, 512, device=device, dtype=dtype)
-                    
+                    a = torch.randn(512, 512, device=device, dtype=dtype)
+                    b = torch.randn(512, 512, device=device, dtype=dtype)
                     for _ in range(int(compile_args.get("warmup_runs", 1))):
                         with torch.no_grad():
                             _ = cmod(a, b)
@@ -196,24 +183,21 @@ Author: eddy
             except Exception as e:
                 print(f"[TorchCompileSpeed] Warning: PTX warmup failed: {e}")
 
-        model_clone  = model.clone()
-        clone_base   = model_clone.model
-        
+        model_clone = model.clone()
+
         try:
-            cache_enabled    = compile_args.get("reuse_if_similar", True)
-            sig              = (id(target_module), backend, mode, dynamic, fullgraph)
-            compiled_forward = None
-            
+            cache_enabled = compile_args.get("reuse_if_similar", True)
+            sig = (id(model_clone.model), backend, mode, dynamic, fullgraph)
             if cache_enabled:
-                cached_map = COMPILED_FORWARD_CACHE.get(target_module)
+                cached_map = COMPILED_FORWARD_CACHE.get(model_clone.model)
                 if cached_map is None:
                     cached_map = {}
-                    COMPILED_FORWARD_CACHE[target_module] = cached_map
+                    COMPILED_FORWARD_CACHE[model_clone.model] = cached_map
                 if sig in cached_map:
                     compiled_forward = cached_map[sig]
                     print("[TorchCompileSpeed] Reused compiled forward from cache")
                 else:
-                    original_forward = clone_base.forward
+                    original_forward = model_clone.model.forward
                     compiled_forward = torch.compile(
                         original_forward,
                         backend=backend,
@@ -224,7 +208,7 @@ Author: eddy
                     cached_map[sig] = compiled_forward
                     print(f"[TorchCompileSpeed] Compiled and cached forward backend={backend}, mode={mode}, dynamic={dynamic}")
             else:
-                original_forward = clone_base.forward
+                original_forward = model_clone.model.forward
                 compiled_forward = torch.compile(
                     original_forward,
                     backend=backend,
@@ -232,8 +216,7 @@ Author: eddy
                     mode=mode,
                     dynamic=dynamic
                 )
-                
-            clone_base.forward = compiled_forward
+            model_clone.model.forward = compiled_forward
         except Exception as e:
             print(f"[TorchCompileSpeed] ERROR: Compilation failed: {e}")
             return (model,)
